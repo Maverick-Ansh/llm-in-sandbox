@@ -91,6 +91,7 @@ class Sandbox:
                 self.root,
                 argv_prefix=self._backend.argv_prefix(),
                 rlimits=self._backend.rlimits,
+                child_hook=self._backend.child_hook(),
                 default_timeout_s=self.command_timeout_s,
                 max_output_bytes=self.max_output_bytes,
             )

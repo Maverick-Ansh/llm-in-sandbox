@@ -38,6 +38,7 @@ import select
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -178,6 +179,7 @@ class PersistentShell:
         env: dict[str, str] | None = None,
         argv_prefix: list[str] | None = None,
         rlimits: dict[int, tuple[int, int]] | None = None,
+        child_hook: Callable[[], None] | None = None,
         default_timeout_s: float = 10.0,
         max_output_bytes: int = 64_000,
         encoding: str = "utf-8",
@@ -191,6 +193,7 @@ class PersistentShell:
         self.env = env
         self.argv_prefix = list(argv_prefix or [])
         self.rlimits = dict(rlimits or {})
+        self.child_hook = child_hook
         self.default_timeout_s = default_timeout_s
         self.max_output_bytes = max_output_bytes
         self.encoding = encoding
@@ -262,6 +265,7 @@ class PersistentShell:
 
     def _child_setup(self, slave_fd: int):
         rlimits = self.rlimits
+        child_hook = self.child_hook
 
         def _setup() -> None:  # pragma: no cover - runs in forked child
             import resource
@@ -277,6 +281,12 @@ class PersistentShell:
                     # A limit the kernel rejects (or one already lower than the
                     # request) must not abort sandbox creation.
                     pass
+            # Last, because a syscall filter installed here may block calls the
+            # steps above need. Deliberately not wrapped in try/except: if the
+            # hook cannot apply its restriction it exits the child, since a
+            # sandbox that silently kept a capability would invalidate the run.
+            if child_hook is not None:
+                child_hook()
 
         return _setup
 

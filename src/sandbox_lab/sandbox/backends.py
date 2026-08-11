@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -114,6 +115,10 @@ class Backend:
         """Shell run *inside* the sandbox before the agent's first command."""
         return ""
 
+    def child_hook(self) -> Callable[[], None] | None:
+        """Callable run in the forked child, after rlimits, before exec."""
+        return None
+
     def describe(self) -> str:
         return f"{self.name} (caps={self.caps.slug})"
 
@@ -182,6 +187,48 @@ class UnshareBackend(Backend):
 
 
 @dataclass
+class SeccompBackend(Backend):
+    """Syscall filtering where namespaces are unavailable.
+
+    This is the backend that makes enforced ablations possible on Colab, whose
+    container denies ``unshare(2)`` even to uid 0. seccomp needs no privileges
+    (only ``PR_SET_NO_NEW_PRIVS`` first), and the filter is inherited by every
+    descendant of the shell.
+
+    Honest about what it does *not* do: it filters syscalls, it does not
+    virtualise the machine. There is no PID or mount isolation, so the agent can
+    see host processes and the wider filesystem. It is strictly weaker than
+    :class:`UnshareBackend` - it is used only when that is unavailable, and only
+    the network capability is genuinely enforceable this way. Filesystem
+    read-only enforcement needs a mount namespace, so ``file_management=False``
+    is *not* claimed here.
+    """
+
+    name = "seccomp"
+
+    def preflight(self) -> None:
+        from .seccomp import seccomp_available
+
+        if os.name != "posix":
+            raise BackendUnavailable("seccomp requires Linux")
+        if not self.caps.file_management:
+            raise BackendUnavailable(
+                "seccomp cannot enforce a read-only filesystem - that needs a "
+                "mount namespace. Use the unshare or docker backend for the "
+                "file_management ablation."
+            )
+        if not seccomp_available():
+            raise BackendUnavailable("kernel or container refused a seccomp filter")
+
+    def child_hook(self) -> Callable[[], None] | None:
+        if self.caps.external_resources:
+            return None
+        from .seccomp import make_network_blocker
+
+        return make_network_blocker()
+
+
+@dataclass
 class DockerBackend(Backend):
     """Container isolation, matching the paper's own setup where available."""
 
@@ -227,6 +274,7 @@ def select_backend(
     registry: dict[str, type[Backend]] = {
         "docker": DockerBackend,
         "unshare": UnshareBackend,
+        "seccomp": SeccompBackend,
         "local": Backend,
     }
 
@@ -239,7 +287,10 @@ def select_backend(
 
     enforced = not (caps.external_resources and caps.file_management)
     errors = []
-    for key in ("docker", "unshare"):
+    # Strongest first. seccomp sits below the two isolating backends because it
+    # filters syscalls without virtualising anything - it can enforce the
+    # network ablation, but it is not a substitute for namespaces.
+    for key in ("docker", "unshare", "seccomp"):
         backend = registry[key](root=root, caps=caps, rlimits=limits)
         try:
             backend.preflight()

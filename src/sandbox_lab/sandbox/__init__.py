@@ -5,10 +5,12 @@ from .backends import (
     BackendUnavailable,
     Capabilities,
     DockerBackend,
+    SeccompBackend,
     UnshareBackend,
     default_rlimits,
     select_backend,
 )
+from .seccomp import SeccompUnavailable, make_network_blocker, seccomp_available
 from .editor import EditorError, FileEditor, PathJail
 from .sandbox import Sandbox, SandboxBudgetExceeded, SandboxStats
 from .shell import PersistentShell, ShellError, ShellResult
@@ -35,11 +37,15 @@ __all__ = [
     "Sandbox",
     "SandboxBudgetExceeded",
     "SandboxStats",
+    "SeccompBackend",
+    "SeccompUnavailable",
     "ShellError",
     "ShellResult",
     "ToolDispatcher",
     "UnshareBackend",
     "default_rlimits",
+    "make_network_blocker",
+    "seccomp_available",
     "select_backend",
     "tools_for",
 ]
