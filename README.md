@@ -254,14 +254,22 @@ python scripts/run_sweep.py --benchmark mmlu_pro --n 40 \
 
 ## Results
 
-**Status: the headline sweep is incomplete.** The run was stopped partway with
-38 of 96 `direct` episodes finished and the `sandbox` arm not yet started, so
-there is no paired comparison to report. Partial single-arm accuracy is not a
-result and is deliberately not quoted here — the design is paired, and half of a
-paired design measures nothing.
+**Status: no paired result yet.** See [`docs/RESUME.md`](docs/RESUME.md) for the
+exact commands to finish it.
 
-`results.jsonl` is resumable: re-running the same `run_sweep.py` command
-continues from where it stopped.
+The `direct` arm is complete (100/100). The `sandbox` arm is **not** — its first
+42 episodes were deleted on purpose, because they ran under the tool-argument
+parser bug and so every `bash` call failed. Reporting them would have put a
+harness artefact in the results table, and one shaped exactly like the paper's
+finding. No single-arm accuracy is quoted here: the design is paired, and half
+of a paired design measures nothing.
+
+A note on what this experiment can and cannot resolve: 100 paired items detects
+roughly a 10+ point swing. Simulating a genuine +8pp effect at this sample size
+produced an observed +13.3pp with a 95% CI of `[-3.3, +30.0]`, p=0.185 — not
+significant. `report.py` prints CIs and exact McNemar p-values so that a null
+reads as "no detectable effect at this sample size" rather than becoming an
+accidental claim.
 
 What *is* established, and measured rather than assumed:
 
