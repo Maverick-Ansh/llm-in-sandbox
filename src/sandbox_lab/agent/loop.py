@@ -91,7 +91,11 @@ class AgentConfig:
     # 30-turn episode inside a 32k window without dropping the reasoning thread.
     keep_full_observations: int = 6
     max_observation_chars: int = 6000
-    request_timeout_s: float = 240.0
+    # Generous, because the baseline is deliberately given a large one-shot
+    # budget: 8192 tokens on a T4 can exceed a 240s deadline, and 7 of 99
+    # baseline episodes died that way on the first run. A timeout scores as
+    # wrong, so a tight deadline silently penalises the arm that generates most.
+    request_timeout_s: float = 900.0
 
 
 @dataclass
@@ -548,6 +552,55 @@ def extract_final_answer(content: str) -> str | None:
     boxed = re.findall(r"\\boxed\{([^}]*)\}", content)
     if boxed:
         return _strip_answer_label(boxed[-1])
+    return _terse_answer(content)
+
+
+# An option letter delivered as an answer: "(D) ...", "F. ...", "A: ...", or a
+# bare "C". Every form requires a bracket or delimiter, or that the letter is
+# the entire line. That requirement is the whole safety property - without it
+# any reasoning line starting with a capital A-J word ("Before concluding...")
+# would be harvested as that letter.
+_TERSE_CHOICE_RE = re.compile(r"^(?:\(\s*([A-J])\s*\)|([A-J])\s*[.):]|([A-J])\s*$)")
+
+# A short answer-shaped token: no whitespace, so numbers, fractions and simple
+# expressions qualify while prose does not.
+_TERSE_VALUE_RE = re.compile(r"^[^\s]{1,40}$")
+
+
+def _terse_answer(content: str) -> str | None:
+    """Accept an answer given without the requested label.
+
+    Measured on a real run: 17 of 99 baseline episodes produced completions like
+    ``C`` or ``F. The population of SAT scores...`` - two to fifteen tokens - and
+    were scored as having no answer at all. The model was not failing; it was
+    obeying the benchmark's own instruction ("Answer with the letter of the
+    correct option only"), which overrides the system prompt's request for a
+    ``FINAL ANSWER:`` line.
+
+    Refusing those penalises the baseline specifically: the sandbox arm delivers
+    its answer through the ``finish`` tool and is never affected. Left in place
+    the bug would have manufactured a large sandbox advantage out of formatting.
+
+    The fallback is deliberately conservative - it recognises answer *shapes*,
+    not "short text". Accepting any short line would turn "Before concluding,
+    check the units" into an answer, which is a worse failure than the one being
+    fixed because it grades silently rather than visibly.
+    """
+    lines = [line.strip() for line in content.strip().splitlines() if line.strip()]
+    if not lines:
+        return None
+    last = lines[-1].strip("*").strip()
+    if len(last) > 200:
+        return None
+
+    choice = _TERSE_CHOICE_RE.match(last)
+    if choice:
+        return next(group for group in choice.groups() if group)
+
+    # A bare value, only when it is the model's entire reply - a value on the
+    # last line of a long derivation is more likely an intermediate result.
+    if len(lines) == 1 and _TERSE_VALUE_RE.match(last):
+        return last
     return None
 
 

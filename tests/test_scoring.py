@@ -44,6 +44,51 @@ def test_last_answer_wins():
     assert extract_final_answer("FINAL ANSWER: 3\nwait\nFINAL ANSWER: 4") == "4"
 
 
+# ------------------------------------------- terse answers without the label
+#
+# Observed on a real run: 17 of 99 baseline episodes answered in 2-15 tokens,
+# obeying the benchmark's own "answer with the letter only" instruction rather
+# than the system prompt's FINAL ANSWER format, and were scored as having no
+# answer. That penalises the baseline specifically - the sandbox arm answers
+# through the `finish` tool and is never affected.
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("C", "C"),
+        ("  B  ", "B"),
+        ("42", "42"),
+        ("F. The population of SAT scores from each group is normally distributed.", "F"),
+        ("(D) 3.14 metres per second", "D"),
+        ("A: the first option", "A"),
+    ],
+)
+def test_terse_answers_are_accepted(content, expected):
+    assert extract_final_answer(content) == expected
+
+
+def test_prose_is_not_mistaken_for_a_lettered_answer():
+    """The delimiter requirement is what makes the fallback safe.
+
+    Without it, any reasoning line beginning with a capital A-J word ("A more
+    careful analysis...") would be harvested as that letter, silently scoring
+    long completions against a letter they never chose.
+    """
+    assert extract_final_answer("A more careful analysis shows the value grows") is None
+    assert extract_final_answer("Before concluding, check the units") is None
+    assert (
+        extract_final_answer("\n".join(f"step {i} of the derivation" for i in range(30)))
+        is None
+    )
+
+
+def test_long_unlabelled_reasoning_yields_no_answer():
+    """A long chain with no marker and no terse ending is genuinely unanswered."""
+    body = "We integrate by parts and obtain a messy expression " * 20
+    assert extract_final_answer(body) is None
+
+
 # ------------------------------------------------------------- multiple choice
 
 

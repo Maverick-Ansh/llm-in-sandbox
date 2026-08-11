@@ -50,7 +50,14 @@ class RunResult:
     sandbox_stats: dict[str, Any] | None = None
 
 
-def _completed_keys(path: Path) -> set[str]:
+# Outcomes that mean "this episode did not really happen" rather than "the model
+# got it wrong". An API timeout scores as incorrect while telling us nothing
+# about the model, and it penalises whichever arm generates most - so by default
+# these are retried on resume instead of being accepted as results.
+RETRY_STOP_REASONS: tuple[str, ...] = ("error", "harness_error")
+
+
+def _completed_keys(path: Path, retry: tuple[str, ...] = RETRY_STOP_REASONS) -> set[str]:
     """Keys already present in the results file, so a rerun can skip them."""
     if not path.exists():
         return set()
@@ -65,6 +72,8 @@ def _completed_keys(path: Path) -> set[str]:
             except json.JSONDecodeError:
                 # A partial final line from a killed run: ignore it, the task
                 # will simply be redone.
+                continue
+            if row.get("stop_reason") in retry:
                 continue
             done.add(f"{row['task_id']}|{row['mode']}|{row['caps']}")
     return done
