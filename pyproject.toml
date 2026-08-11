@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sandbox-lab"
+version = "0.1.0"
+description = "Reproducing and stress-testing LLM-in-Sandbox (arXiv:2601.16206) on commodity GPUs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "openai>=1.40",
+    "datasets>=2.19",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-timeout>=2.3", "ruff>=0.6"]
+serve = ["vllm==0.11.0", "transformers==4.56.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+addopts = "-q --strict-markers"
+markers = [
+    "linux_only: needs a POSIX PTY / Linux namespaces",
+    "slow: takes more than a few seconds",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

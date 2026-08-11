@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Experiment artifacts: regenerate with scripts/, don't version.
+runs/
+logs/
+*.log
+sessions/
+testbed/
+
+# Results we DO keep are committed explicitly under results/
+!results/**
