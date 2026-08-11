@@ -295,7 +295,7 @@ class SandboxAgent:
                     record.observations.append("[no tool call]")
                     traj.turns.append(record)
                     if stalled_turns >= 2:
-                        traj.final_answer = self._force_answer(messages)
+                        traj.final_answer = self._force_answer(messages, traj)
                         traj.stop_reason = "stalled"
                         break
                     messages.append(
@@ -333,7 +333,7 @@ class SandboxAgent:
                 # Out of turns. Ask once for the answer instead of scoring a
                 # zero: "ran out of turns" and "got it wrong" are different
                 # failures and collapsing them hides where the loss comes from.
-                traj.final_answer = self._force_answer(messages)
+                traj.final_answer = self._force_answer(messages, traj)
                 traj.stop_reason = "max_turns"
 
             traj.sandbox = sandbox.manifest()
@@ -350,9 +350,17 @@ class SandboxAgent:
         traj.wall_s = time.monotonic() - started
         return traj
 
-    def _force_answer(self, messages: list[dict[str, Any]]) -> str | None:
+    def _force_answer(self, messages: list[dict[str, Any]], traj: Trajectory) -> str | None:
+        """Ask once for an answer after the loop ends without one.
+
+        The reply is recorded as a turn rather than consumed silently. It is a
+        real model call: its completion tokens belong in the episode's total,
+        and dropping them understates sandbox token use - biasing the efficiency
+        comparison in the sandbox's favour. Storing the content also means the
+        answer can be re-derived offline by the regrader instead of being lost.
+        """
         try:
-            reply, _, _ = self._complete(
+            reply, usage, latency = self._complete(
                 [
                     *self._compress(messages),
                     {
@@ -366,9 +374,20 @@ class SandboxAgent:
                 tools=None,
                 max_tokens=256,
             )
-            return extract_final_answer(reply.get("content") or "")
         except Exception:  # noqa: BLE001
             return None
+        content = reply.get("content") or ""
+        traj.turns.append(
+            TurnRecord(
+                index=len(traj.turns),
+                completion_tokens=usage["completion_tokens"],
+                prompt_tokens=usage["prompt_tokens"],
+                content=content,
+                observations=["[forced final answer]"],
+                latency_s=latency,
+            )
+        )
+        return extract_final_answer(content)
 
     # -------------------------------------------------------------- plumbing
 
@@ -451,11 +470,20 @@ class SandboxAgent:
             name = parsed.get("name")
             if not name:
                 continue
+            arguments = _coerce_args(parsed.get("arguments", {}))
+            if not arguments:
+                # Observed on Qwen3-4B: it emits {"name": "bash", "command": ...}
+                # with the parameters at the top level rather than nested under
+                # "arguments". Reading only "arguments" yields {}, every bash call
+                # fails with "command is required", and the episode burns all its
+                # turns - a parser artefact that looks exactly like a model
+                # incapable of using the tool.
+                arguments = {k: v for k, v in parsed.items() if k != "name"}
             calls.append(
                 {
                     "id": f"textcall_{index}",
                     "name": name,
-                    "arguments": _coerce_args(parsed.get("arguments", {})),
+                    "arguments": arguments,
                 }
             )
         if calls:

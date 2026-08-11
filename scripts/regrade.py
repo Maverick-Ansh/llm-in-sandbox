@@ -82,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
             continue
         traj = json.loads(path.read_text(encoding="utf-8"))
         answer, source = answer_from_trajectory(traj)
+        if answer is None and row.get("predicted"):
+            # Re-derivation failed but the original run did produce an answer.
+            # Episodes recorded before the forced-answer call was stored as a
+            # turn are unrecoverable from disk, and overwriting a real answer
+            # with None would silently mark correct episodes wrong - a regrade
+            # must never be able to lose information it cannot reconstruct.
+            answer, source = row["predicted"], "kept"
         sources[source] += 1
 
         # Look up the item's answer kind the same way the runner did: multiple

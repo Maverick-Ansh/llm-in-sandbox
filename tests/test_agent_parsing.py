@@ -77,6 +77,27 @@ def test_no_calls_when_there_is_nothing_to_parse():
     assert calls_for(None) == []
 
 
+def test_recovers_top_level_arguments_in_a_text_tool_call():
+    """Observed on Qwen3-4B: parameters at the top level, not under "arguments".
+
+    Reading only "arguments" yields {}, every bash call then fails with
+    "command is required", and the episode burns all its turns - which looks
+    exactly like a model that cannot use tools.
+    """
+    content = '<tool_call>\n{"name": "bash", "command": "python3 -c \\"print(2+2)\\""}\n</tool_call>'
+    calls = calls_for(content)
+    assert calls[0]["name"] == "bash"
+    assert calls[0]["arguments"]["command"] == 'python3 -c "print(2+2)"'
+
+
+def test_nested_arguments_still_win_over_top_level_keys():
+    content = (
+        '<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}, "command": "rm -rf /"}\n'
+        "</tool_call>"
+    )
+    assert calls_for(content)[0]["arguments"] == {"command": "ls"}
+
+
 def test_bare_string_arguments_are_coerced_to_a_command():
     """Some models emit the command as a bare string rather than JSON."""
     calls = calls_for(None, [{"id": "c1", "name": "bash", "arguments": "ls -la"}])
