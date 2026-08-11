@@ -41,7 +41,10 @@ For slow work use: nohup <cmd> > /tmp/out.log 2>&1 &  then poll the log.
 - Check your work. A result you have verified twice is worth more than three \
 you have not.
 
-When you have the answer, call `finish` with the answer alone."""
+Ending the episode: the moment you have the answer, call the `finish` tool with \
+it. Do not restate it in prose and stop - an episode only counts as answered if \
+`finish` was called. Every turn you spend after you already know the answer is \
+wasted."""
 
 DIRECT_SYSTEM_PROMPT = """You are a careful expert problem solver.
 
@@ -56,7 +59,9 @@ multiple choice, give the letter only."""
 # Recognises the baseline's answer line, tolerating the formatting the model
 # actually produces (bold, colons, spacing) rather than only the ideal form.
 _FINAL_ANSWER_RE = re.compile(
-    r"final\s*answer\s*[:\-]?\s*\**\s*(.+?)\s*\**\s*$",
+    # The optional "is" matters: "The final answer is 42" is at least as common
+    # as "FINAL ANSWER: 42", and without it the capture starts at "is 42".
+    r"final\s*answer\s*(?:is)?\s*[:\-]?\s*\**\s*(.+?)\s*\**\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 # Fallback for models that emit tool calls as text when native parsing misfires.
@@ -235,6 +240,7 @@ class SandboxAgent:
                 sandbox.write_document(name, content)
 
             dispatcher = ToolDispatcher(sandbox)
+            stalled_turns = 0
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": SANDBOX_SYSTEM_PROMPT},
                 {"role": "user", "content": self._user_message(question, documents, sandbox)},
@@ -256,9 +262,12 @@ class SandboxAgent:
 
                 if not calls:
                     # No tool call: either it answered in prose, or it stalled.
-                    # Accept a well-formed answer, otherwise nudge once per turn
-                    # rather than ending the episode - small models often just
-                    # forget the tool on a single turn.
+                    # Small models routinely solve the task, narrate the answer,
+                    # and then forget `finish` - left alone they burn every
+                    # remaining turn repeating themselves, which both wastes
+                    # compute and inflates the very token count we are measuring.
+                    # So: accept a well-formed answer, nudge once, and give up on
+                    # the second consecutive miss.
                     messages.append({"role": "assistant", "content": record.content})
                     parsed = extract_final_answer(record.content)
                     if parsed:
@@ -266,15 +275,26 @@ class SandboxAgent:
                         traj.final_answer = parsed
                         traj.stop_reason = "answered_in_prose"
                         break
+
+                    stalled_turns += 1
                     record.observations.append("[no tool call]")
+                    traj.turns.append(record)
+                    if stalled_turns >= 2:
+                        traj.final_answer = self._force_answer(messages)
+                        traj.stop_reason = "stalled"
+                        break
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Continue by calling a tool, or call `finish` with your answer.",
+                            "content": (
+                                "You did not call a tool. If you already have the "
+                                "answer, call `finish` with it now. Otherwise call "
+                                "`bash` or `file_editor` to continue."
+                            ),
                         }
                     )
-                    traj.turns.append(record)
                     continue
+                stalled_turns = 0
 
                 messages.append(self._assistant_message(record.content, calls))
                 for call in calls:
@@ -503,8 +523,30 @@ def extract_final_answer(content: str) -> str | None:
         return None
     matches = _FINAL_ANSWER_RE.findall(content)
     if matches:
-        return matches[-1].strip().strip("*").strip()
+        return _strip_answer_label(matches[-1])
     boxed = re.findall(r"\\boxed\{([^}]*)\}", content)
     if boxed:
-        return boxed[-1].strip()
+        return _strip_answer_label(boxed[-1])
     return None
+
+
+def _strip_answer_label(text: str) -> str:
+    """Remove any leftover 'FINAL ANSWER:' label from a captured answer.
+
+    Models re-state the label inside the answer often enough ("FINAL ANSWER:
+    FINAL ANSWER: 849", or a bolded label the capture group swallowed) that
+    leaving it in silently grades correct answers as wrong. Applied to both
+    modes so neither is advantaged.
+    """
+    out = text.strip().strip("*").strip()
+    for _ in range(3):  # bounded: strip repeated labels without looping forever
+        stripped = re.sub(
+            r"^\**\s*(the\s+)?final\s*answer\s*(is)?\s*[:\-]?\s*\**\s*",
+            "",
+            out,
+            flags=re.IGNORECASE,
+        ).strip()
+        if stripped == out:
+            break
+        out = stripped
+    return out.strip().strip("*").strip()

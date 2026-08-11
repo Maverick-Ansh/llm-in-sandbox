@@ -30,11 +30,18 @@ difference between "the model chose not to" and "the model could not".
 from __future__ import annotations
 
 import os
-import resource
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# POSIX-only. Imported lazily so the pure-Python parts of the package (the
+# editor, the grader, the dataset loaders) stay importable on Windows for local
+# development and CI, even though sandboxes themselves only run on Linux.
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows
+    resource = None  # type: ignore[assignment]
 
 
 class BackendUnavailable(RuntimeError):
@@ -51,6 +58,8 @@ def default_rlimits(
     max_file_mb: int = 512,
     cpu_seconds: int | None = None,
 ) -> dict[int, tuple[int, int]]:
+    if resource is None:
+        return {}
     limits: dict[int, tuple[int, int]] = {
         resource.RLIMIT_AS: (address_space_mb * 1024 * 1024,) * 2,
         resource.RLIMIT_NPROC: (max_processes,) * 2,

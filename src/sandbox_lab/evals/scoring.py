@@ -28,9 +28,12 @@ _LATEX_WRAPPERS = [
     (re.compile(r"\\mathrm\s*\{(.+?)\}", re.DOTALL), r"\1"),
     (re.compile(r"\$+(.+?)\$+", re.DOTALL), r"\1"),
 ]
+# Trailing units are noise; "%" is deliberately NOT here. Stripping it turns
+# "50%" into "50", which then fails to match a reference of "1/2" - percent is
+# part of the value, not a unit.
 _UNITS = re.compile(
     r"\s*(units?|meters?|metres?|m/s\^?2?|seconds?|s|kg|grams?|g|joules?|J|"
-    r"newtons?|N|degrees?|percent|%|dollars?|cm|mm|km|mol|moles?|kelvin|K)\s*$",
+    r"newtons?|N|degrees?|dollars?|cm|mm|km|mol|moles?|kelvin|K)\s*$",
     re.IGNORECASE,
 )
 
@@ -91,6 +94,12 @@ def numeric_match(pred: str, gold: str, *, rel_tol: float = 1e-4) -> bool:
         return False
     if a == b:
         return True
+    # The tolerance exists to bridge a computed decimal against a symbolic
+    # reference (0.3333... vs 1/3). It must NOT blur two distinct integers:
+    # with a relative tolerance, 1000000 and 1000001 differ by 1e-6 and would
+    # compare equal, silently marking wrong AIME answers correct.
+    if a.is_integer() and b.is_integer():
+        return False
     scale = max(abs(a), abs(b), 1e-12)
     return abs(a - b) / scale < rel_tol
 
