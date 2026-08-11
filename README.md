@@ -254,36 +254,48 @@ python scripts/run_sweep.py --benchmark mmlu_pro --n 40 \
 
 ## Results
 
-**Status: no paired result yet.** See [`docs/RESUME.md`](docs/RESUME.md) for the
-exact commands to finish it.
+Qwen3-4B-Instruct-2507, MMLU-Pro, **100 paired items**. Full write-up:
+[`results/qwen3-4b-mmlu-pro.md`](results/qwen3-4b-mmlu-pro.md).
 
-The `direct` arm is complete (100/100). The `sandbox` arm is **not** — its first
-42 episodes were deleted on purpose, because they ran under the tool-argument
-parser bug and so every `bash` call failed. Reporting them would have put a
-harness artefact in the results table, and one shaped exactly like the paper's
-finding. No single-arm accuracy is quoted here: the design is paired, and half
-of a paired design measures nothing.
+| domain | direct | sandbox | delta (pp) | 95% CI | p |
+|---|---:|---:|---:|---:|---:|
+| math | 88.0 | 56.0 | **−32.0** | [−52, −16] | **0.008** |
+| physics | 68.0 | 72.0 | +4.0 | [−8, +16] | 1.000 |
+| chemistry | 64.0 | 64.0 | 0.0 | [0, 0] | 1.000 |
+| biomedicine | 68.0 | 64.0 | −4.0 | [−24, +16] | 1.000 |
+| **ALL** | **72.0** | **64.0** | **−8.0** | [−16, 0] | 0.096 |
 
-A note on what this experiment can and cannot resolve: 100 paired items detects
-roughly a 10+ point swing. Simulating a genuine +8pp effect at this sample size
-produced an observed +13.3pp with a 95% CI of `[-3.3, +30.0]`, p=0.185 — not
-significant. `report.py` prints CIs and exact McNemar p-values so that a null
-reads as "no detectable effect at this sample size" rather than becoming an
-accidental claim.
+Tokens overall **0.84×** — but that average hides the interesting part:
+maths 0.63×, **biomedicine 2.75×**. A sandbox is only cheap where there is
+something to compute; on recall questions the baseline answers with one letter
+(169 tokens) and the sandbox pays 466 for the tool-calling ceremony.
 
-What *is* established, and measured rather than assumed:
+**Directionally this matches the paper's own Qwen3-4B row (−13.5 on maths), but
+the mechanism is not "computing is worse than reasoning".** In 46% of episodes
+the model ran **no commands at all**, and mean file edits were 0.0. On maths it
+scored 0.65 when it did run a command and **0.38 when it did not** — while
+producing 37% less reasoning than the baseline (887 vs 1406 tokens). It gave up
+the chain-of-thought and only sometimes bought computation with it.
+
+> **Read the confound before quoting the number.** This repo's sandbox prompt
+> says *"you are expected to compute answers rather than derive them in your
+> head"*, which actively discourages the reasoning carrying the baseline's 88%.
+> The honest claim is not "sandboxes hurt small models" but "a prompt that
+> trades reasoning for tool use is a bad trade at 4B, because the model does not
+> reliably complete the trade." A third arm with a non-discouraging prompt would
+> separate the two; it has not been run.
+
+Only the maths effect is large enough to resolve at n=100 — a simulated genuine
++8pp effect reads as +13.3pp with CI [−3.3, +30.0], p=0.185, so treat every
+other row as noise.
+
+Also established, measured rather than assumed:
 
 | finding | evidence |
 |---|---|
-| The full agent loop works end to end on a T4 | smoke test: both arms answered 849 correctly |
-| Sandbox mode used **0.49x** the generated tokens of the CoT baseline on that task | 812 vs 1660 tokens — bottom of the paper's reported 0.49–0.84x band, on a single item |
-| Enforced network ablation works where namespaces are denied | 7/7 seccomp tests pass on Colab, each with a positive control |
+| Enforced network ablation works where namespaces are denied | 7/7 seccomp tests on Colab, each with a positive control |
 | `unshare` is unavailable on Colab | `Operation not permitted` as uid 0 (no `CAP_SYS_ADMIN`) |
 | Attention backend dominates T4 throughput | FlexAttention ~22 tok/s → TRITON_ATTN 51–69 tok/s per card; ~120 tok/s across both |
-
-The single-task token ratio is an anecdote, not a measurement — one item, one
-seed. It is reported because it is what the smoke test showed, not as support
-for the paper's claim.
 
 ---
 
