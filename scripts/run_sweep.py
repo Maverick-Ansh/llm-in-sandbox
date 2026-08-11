@@ -30,7 +30,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--n", type=int, default=40, help="items per domain (mmlu_pro) or total")
     p.add_argument("--domains", nargs="*", default=None)
     p.add_argument("--model", default="qwen3-4b")
-    p.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
+    p.add_argument(
+        "--base-url",
+        nargs="+",
+        default=["http://127.0.0.1:8000/v1"],
+        help="one or more model servers; episodes are assigned stickily across them",
+    )
     p.add_argument("--modes", nargs="+", default=["direct", "sandbox"])
     p.add_argument("--max-turns", type=int, default=30)
     p.add_argument("--max-tokens-per-turn", type=int, default=2048)
@@ -84,7 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     tasks = load_suite(args.benchmark, **kwargs)
     print(f"loaded {len(tasks)} tasks from {args.benchmark}")
 
-    client = OpenAI(base_url=args.base_url, api_key="none")
+    clients = [OpenAI(base_url=url, api_key="none") for url in args.base_url]
+    print(f"using {len(clients)} model server(s): {', '.join(args.base_url)}")
     caps = caps_from_slug(args.caps)
 
     (out_dir / "config.json").write_text(
@@ -104,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         run_caps = caps if mode == "sandbox" else Capabilities()
         run_suite(
             tasks,
-            client=client,
+            client=clients,
             config=config,
             caps=run_caps,
             out_dir=out_dir,

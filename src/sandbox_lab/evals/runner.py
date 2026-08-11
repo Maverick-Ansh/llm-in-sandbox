@@ -73,7 +73,7 @@ def _completed_keys(path: Path) -> set[str]:
 def run_suite(
     tasks: Iterable[Task],
     *,
-    client: Any,
+    client: Any | list[Any],
     config: AgentConfig,
     caps: Capabilities | None = None,
     out_dir: str | Path,
@@ -83,8 +83,17 @@ def run_suite(
     resume: bool = True,
     progress: bool = True,
 ) -> list[RunResult]:
-    """Run every task and append results to ``out_dir/results.jsonl``."""
+    """Run every task and append results to ``out_dir/results.jsonl``.
+
+    ``client`` may be a list, one entry per model server. Episodes are assigned
+    to servers **stickily** - a whole episode goes to one server - rather than
+    round-robining individual requests. An agent episode re-sends its growing
+    transcript every turn, so consecutive turns share a long prefix; keeping an
+    episode on one server keeps those prefix-cache hits (measured at ~76% here),
+    whereas per-request spraying would miss on every turn.
+    """
     caps = caps or Capabilities()
+    clients = list(client) if isinstance(client, (list, tuple)) else [client]
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
@@ -100,8 +109,8 @@ def run_suite(
     results: list[RunResult] = []
     started = time.monotonic()
 
-    def one(task: Task) -> tuple[RunResult, Any]:
-        agent = SandboxAgent(client, config)
+    def one(task: Task, slot: int) -> tuple[RunResult, Any]:
+        agent = SandboxAgent(clients[slot % len(clients)], config)
         safe_id = task.task_id.replace("/", "_")
         traj = agent.run(
             task.question,
@@ -132,7 +141,7 @@ def run_suite(
         ), traj
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(one, task): task for task in todo}
+        futures = {pool.submit(one, task, i): task for i, task in enumerate(todo)}
         for n, future in enumerate(as_completed(futures), start=1):
             task = futures[future]
             try:
