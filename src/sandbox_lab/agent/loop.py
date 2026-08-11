@@ -66,6 +66,17 @@ _FINAL_ANSWER_RE = re.compile(
 )
 # Fallback for models that emit tool calls as text when native parsing misfires.
 _TEXT_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+# Small models frequently *write* `finish(849)` in prose instead of emitting a
+# tool call, having clearly decided to finish. Recovering that is standard agent
+# harness behaviour, and not recovering it would charge the sandbox mode extra
+# turns for a formatting slip - a harness artefact that would show up as a
+# capability difference. Deliberately narrow: only `finish`, only at the end of
+# the message, because bash/file_editor arguments cannot be parsed unambiguously
+# out of prose.
+_PROSE_FINISH_RE = re.compile(
+    r"\bfinish\s*\(\s*(?:answer\s*=\s*)?(.*?)\s*\)\s*\.?\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass
@@ -443,6 +454,16 @@ class SandboxAgent:
                     "arguments": _coerce_args(parsed.get("arguments", {})),
                 }
             )
+        if calls:
+            return calls
+
+        prose = _PROSE_FINISH_RE.search(content.strip())
+        if prose:
+            answer = prose.group(1).strip().strip("\"'").strip()
+            if answer:
+                calls.append(
+                    {"id": "prosefinish_0", "name": "finish", "arguments": {"answer": answer}}
+                )
         return calls
 
     @staticmethod
