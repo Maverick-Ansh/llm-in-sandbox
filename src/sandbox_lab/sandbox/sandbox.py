@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .backends import Backend, Capabilities, select_backend
 from .editor import EditorError, FileEditor
-from .shell import PersistentShell, ShellResult
+from .shell import PersistentShell, ShellError, ShellResult
 
 # The paper's soft timeout. Kept as the default so runs are comparable.
 DEFAULT_COMMAND_TIMEOUT_S = 10.0
@@ -30,6 +30,7 @@ class SandboxStats:
     edits: int = 0
     timeouts: int = 0
     failed_commands: int = 0
+    shell_restarts: int = 0
     shell_seconds: float = 0.0
     output_bytes: int = 0
 
@@ -131,7 +132,23 @@ class Sandbox:
             self.stats.timeouts += 1
         elif not result.ok:
             self.stats.failed_commands += 1
-        return self._render(result)
+
+        rendered = self._render(result)
+        if result.shell_died:
+            # A stray `exit` (or a crash) would otherwise brick the rest of the
+            # episode with an unexplained error on every later command. Rebuild
+            # the session and say so - files on disk are untouched.
+            self.stats.shell_restarts += 1
+            try:
+                self._shell.restart()
+                rendered += (
+                    "\n[the shell session exited and has been restarted. Files on "
+                    "disk are intact, but your working directory, environment "
+                    "variables and shell functions were reset.]"
+                )
+            except ShellError as exc:
+                rendered += f"\n[the shell session exited and could not be restarted: {exc}]"
+        return rendered
 
     def _render(self, result: ShellResult) -> str:
         """Turn a ShellResult into the text the model sees.

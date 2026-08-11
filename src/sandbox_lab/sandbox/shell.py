@@ -79,6 +79,11 @@ class ShellResult:
     timed_out: bool = False
     truncated: bool = False
     total_bytes: int = 0
+    # True when the command ended the session itself (`exit`, or a crash).
+    # Commands are sourced into the live shell, so `exit` is not sandboxed away
+    # from it - exactly as in a real terminal. The caller decides whether to
+    # restart; silently returning exit_code=None would look like a timeout.
+    shell_died: bool = False
 
     @property
     def ok(self) -> bool:
@@ -319,6 +324,11 @@ class PersistentShell:
             exit_code, timed_out = self._interrupt(buf, pattern)
 
         duration = time.monotonic() - started
+        shell_died = self._proc.poll() is not None
+        if shell_died and exit_code is None and not timed_out:
+            # `exit N` takes the shell down with the reported status; recover it
+            # rather than reporting a bare None the caller cannot interpret.
+            exit_code = self._proc.returncode
         try:
             script.unlink()
         except OSError:
@@ -332,6 +342,7 @@ class PersistentShell:
             timed_out=timed_out,
             truncated=buf.truncated,
             total_bytes=buf.total,
+            shell_died=shell_died,
         )
 
     def _pump(
@@ -469,6 +480,16 @@ class PersistentShell:
                 os.close(master_fd)
             except OSError:
                 pass
+
+    def restart(self) -> None:
+        """Rebuild the session after it exited.
+
+        Files on disk survive (they are the sandbox root, not the process), so
+        an episode loses its shell state but not its work.
+        """
+        self.close()
+        self._seq = 0
+        self.start()
 
     def __enter__(self) -> "PersistentShell":
         self.start()

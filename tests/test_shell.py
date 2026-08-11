@@ -38,9 +38,41 @@ def test_basic_command_and_exit_code(shell):
 
 
 def test_nonzero_exit_code_is_reported(shell):
-    result = shell.run("exit 3")
+    # A subshell, not a bare `exit`: commands are sourced into the live shell,
+    # so `exit` would end the session rather than report a status - see
+    # test_exit_ends_the_session_and_is_flagged.
+    result = shell.run("(exit 3)")
     assert result.exit_code == 3
     assert not result.ok
+    assert not result.shell_died
+
+
+def test_failing_command_reports_status_and_keeps_session(shell):
+    assert shell.run("false").exit_code == 1
+    assert shell.run("ls /definitely/not/here").exit_code != 0
+    assert shell.run("echo survived").output == "survived"
+
+
+def test_exit_ends_the_session_and_is_flagged(shell):
+    """`exit` really does end the session, and we must say so.
+
+    This is correct terminal behaviour and not something to paper over, but the
+    caller has to be able to tell it apart from a timeout - both would otherwise
+    surface as exit_code=None.
+    """
+    result = shell.run("exit 3")
+    assert result.shell_died
+    assert result.exit_code == 3
+    assert not result.timed_out
+
+
+def test_shell_can_be_restarted_after_exit(shell, tmp_path):
+    (tmp_path / "work.txt").write_text("preserved")
+    shell.run("exit 1")
+    shell.restart()
+    assert shell.run("echo back").output == "back"
+    # Files are the sandbox root, not the process: work must survive.
+    assert shell.run("cat work.txt").output == "preserved"
 
 
 def test_stderr_is_interleaved_with_stdout(shell):
