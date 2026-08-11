@@ -118,8 +118,17 @@ def test_local_ipc_and_files_still_work_without_network(tmp_path):
 @requires_seccomp
 @pytest.mark.slow
 def test_filter_is_inherited_by_grandchildren(tmp_path):
-    """seccomp survives fork and exec, so a subshell cannot escape it."""
+    """seccomp survives fork and exec, so a subshell cannot escape it.
+
+    The probe goes to a file rather than being nested inside `bash -c "..."`:
+    with three levels of quoting the shell echoes the mangled command back, and
+    the echo itself contains the success marker, so the assertion passes or
+    fails on the wrong string entirely.
+    """
     caps = Capabilities(external_resources=False)
     with Sandbox(tmp_path, caps=caps, backend="seccomp") as sb:
-        out = sb.bash(f"bash -c 'python3 -c \\\"{NET_PROBE}\\\"'", timeout_s=25)
+        sb.file_editor("create", path="probe.py", file_text=NET_PROBE)
+        out = sb.bash("bash -c 'python3 probe.py'", timeout_s=25)
     assert "REACHED" not in out
+    # The probe must have actually run and been refused, not failed to launch.
+    assert "PermissionError" in out or "Permission denied" in out
