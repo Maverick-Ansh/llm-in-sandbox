@@ -181,6 +181,43 @@ them:
 
 ---
 
+## Four measurement bugs, and which way each one lied
+
+The first real run surfaced four bugs. None crashed anything. Every one of them
+would have shown up purely as a wrong number in the results table, and three of
+the four pushed in a direction that would have *confirmed* the paper's finding
+for small models. They are listed here because "we ran it and got a delta" is
+worth very little without knowing what was checked.
+
+| bug | who it hurt | size |
+|---|---|---|
+| Extractor required a `FINAL ANSWER:` label | **baseline only** | 17/99 episodes; accuracy 0.596 → 0.700 |
+| Tool arguments read only from `arguments` | **sandbox only** | every `bash` call failed → episode burned all 20 turns |
+| Forced-answer call not counted as a turn | **sandbox only** | its tokens vanished, understating sandbox usage |
+| 240s request deadline | **baseline only** | 7/99 episodes scored wrong for generating too much |
+
+**The label bug is the instructive one.** MMLU-Pro's own prompt says "answer
+with the letter of the correct option only", and the model obeyed it —
+returning `C`, two tokens, which the extractor read as *no answer at all*. The
+sandbox arm answers through the `finish` tool and never touches that path, so
+the bug was structurally incapable of affecting it. Left in, it would have
+handed the sandbox a ~10 point advantage made entirely of formatting.
+
+**The tool-argument bug is its mirror image.** Qwen3-4B emits
+`{"name": "bash", "command": ...}` with parameters at the top level rather than
+nested under `"arguments"`. Reading only `arguments` yielded `{}`, so every
+command failed with "command is required" and the episode exhausted its turn
+budget. In a results table that is indistinguishable from a small model that
+cannot use tools — which is precisely the paper's reported finding at 4B. It
+would have looked like a successful reproduction.
+
+The general lesson: in a two-arm comparison, any bug in a code path that only
+one arm exercises is an effect-size bug, not a crash. Both arms therefore share
+the grader and the extractor, and the loop-level tests assert that
+`generated_tokens` means the same thing on both sides.
+
+---
+
 ## Running it
 
 ```bash
