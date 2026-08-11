@@ -73,21 +73,46 @@ is removed for real:
 
 | capability | paper | here |
 |---|---|---|
-| external resource access | prompt says no network | `--net` namespace: `pip install` genuinely fails |
+| external resource access | prompt says no network | namespace or seccomp: `pip install` genuinely fails |
 | file management | prompt discourages files | read-only bind mount: `open(...,"w")` genuinely fails |
 | code execution | tool withheld | tool withheld |
 
-`test_disabling_external_resources_actually_breaks_the_network` includes a
-**positive control** — the same probe must succeed with the capability enabled —
-because a test that only checks the network is down also passes when the network
-was never reachable.
+Every "the capability is gone" test is paired with a **positive control** — the
+same probe must succeed with the capability enabled. A test that only checks the
+network is down also passes on a host with no network at all, and would certify
+an ablation that never happened.
 
-> **Caveat, measured not assumed:** on the Colab runtime used here `unshare`
-> returns `Operation not permitted` even as uid 0, because the container drops
-> `CAP_SYS_ADMIN`. Namespace-enforced ablations therefore **skip** on Colab.
-> `select_backend` refuses to silently fall back to the unisolated backend when a
-> capability is ablated — a silent downgrade would produce a results table that
-> looks fine and means nothing.
+### Getting enforcement on a host that forbids namespaces
+
+Colab denies `unshare(2)` even to uid 0 — the container drops `CAP_SYS_ADMIN`,
+so every namespace flag returns `Operation not permitted`. That would leave the
+paper's most distinctive capability unenforceable on the only hardware this
+project runs on.
+
+`SeccompBackend` is the way through. Since Linux 3.5 an **unprivileged** process
+may install a seccomp-BPF syscall filter provided it first sets
+`PR_SET_NO_NEW_PRIVS` — the promise that it cannot gain privileges through a
+later `execve`, which is what makes the operation safe to allow without
+capabilities. The filter denies `socket(AF_INET/AF_INET6)` with `EACCES` and is
+inherited across `fork` and `execve`, so it covers every process the agent
+spawns, including a subshell. `AF_UNIX` is deliberately untouched: the ablation
+removes *external resource* access, not local IPC.
+
+Measured on Colab: `pip install` fails, `socket.create_connection` raises
+`PermissionError`, unix sockets and file writes are unaffected.
+
+It is honestly weaker than a namespace — it filters syscalls, it does not
+virtualise the machine, so there is no PID or mount isolation. It therefore
+**refuses** `file_management=False` rather than pretending: a read-only path
+needs a mount namespace, and accepting it silently would produce a run labelled
+as an enforced ablation in which the model could still write files.
+
+Backend order is `docker > unshare > seccomp > local`, and the *same* backend is
+used for every condition in a comparison — otherwise the measured delta would be
+confounded by the isolation mechanism changing underneath it. `select_backend`
+refuses to fall back to the unisolated backend when a capability is ablated; a
+silent downgrade would produce a results table that looks fine and means
+nothing.
 
 ---
 
