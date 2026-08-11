@@ -37,4 +37,6 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# SIM105: several of these try/except/pass blocks carry a comment explaining
+# which failure is being tolerated and why; contextlib.suppress hides that.
+ignore = ["E501", "SIM105"]

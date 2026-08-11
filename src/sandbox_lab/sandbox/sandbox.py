@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .backends import Backend, Capabilities, select_backend
@@ -80,7 +79,7 @@ class Sandbox:
 
     # ----------------------------------------------------------------- setup
 
-    def start(self) -> "Sandbox":
+    def start(self) -> Sandbox:
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "documents").mkdir(exist_ok=True)
 
@@ -248,7 +247,7 @@ class Sandbox:
             self._shell.close()
             self._shell = None
 
-    def __enter__(self) -> "Sandbox":
+    def __enter__(self) -> Sandbox:
         return self.start()
 
     def __exit__(self, *exc: object) -> None:

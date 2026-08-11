@@ -13,7 +13,8 @@ implicit will be got wrong.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .backends import Capabilities
 from .sandbox import Sandbox
@@ -123,11 +124,12 @@ def tools_for(caps: Capabilities) -> list[dict[str, Any]]:
     tools = []
     if caps.code_execution:
         tools.append(BASH_TOOL)
-    if caps.file_management or True:
-        # `view` stays available even read-only: removing all file access would
-        # also remove the ability to *read* the task's own context documents,
-        # which is a different intervention than removing file *management*.
-        tools.append(FILE_EDITOR_TOOL)
+    # file_editor is always offered, even when file management is disabled:
+    # `view` must survive so the model can still *read* the task's own context
+    # documents. Removing all file access would be a different intervention than
+    # removing file *management*, and the write commands are refused by the
+    # sandbox anyway.
+    tools.append(FILE_EDITOR_TOOL)
     tools.append(FINISH_TOOL)
     return tools
 

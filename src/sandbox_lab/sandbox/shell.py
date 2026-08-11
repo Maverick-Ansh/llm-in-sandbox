@@ -38,7 +38,7 @@ import select
 import signal
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 IS_POSIX = os.name == "posix"
@@ -491,7 +491,7 @@ class PersistentShell:
         self._seq = 0
         self.start()
 
-    def __enter__(self) -> "PersistentShell":
+    def __enter__(self) -> PersistentShell:
         self.start()
         return self
 

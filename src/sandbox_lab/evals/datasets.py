@@ -40,7 +40,9 @@ class Task:
 
 def _mc_prompt(question: str, options: list[str]) -> str:
     letters = [chr(ord("A") + i) for i in range(len(options))]
-    body = "\n".join(f"{letter}. {text}" for letter, text in zip(letters, options))
+    body = "\n".join(
+        f"{letter}. {text}" for letter, text in zip(letters, options, strict=True)
+    )
     return (
         f"{question}\n\n{body}\n\n"
         f"Answer with the letter of the correct option ({letters[0]}-{letters[-1]}) only."
