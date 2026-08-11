@@ -152,22 +152,43 @@ def test_disabling_file_management_makes_the_root_read_only(tmp_path):
         assert "disabled" in sb.file_editor("create", path="x.txt", file_text="x")
 
 
-def test_ablation_refuses_to_silently_downgrade_isolation(tmp_path, monkeypatch):
-    """If isolation is unavailable, an ablation must fail loudly.
-
-    Falling back to the local backend would leave the capability quietly
-    enabled and produce a result table that looks fine and means nothing.
-    """
+def _disable(monkeypatch, *names: str) -> None:
     import sandbox_lab.sandbox.backends as backends
 
     def always_unavailable(self):
         raise BackendUnavailable("simulated")
 
-    monkeypatch.setattr(backends.UnshareBackend, "preflight", always_unavailable)
-    monkeypatch.setattr(backends.DockerBackend, "preflight", always_unavailable)
+    for name in names:
+        monkeypatch.setattr(getattr(backends, name), "preflight", always_unavailable)
+
+
+def test_ablation_refuses_to_silently_downgrade_isolation(tmp_path, monkeypatch):
+    """If no backend can enforce it, an ablation must fail loudly.
+
+    Falling back to the local backend would leave the capability quietly
+    enabled and produce a result table that looks fine and means nothing.
+    """
+    _disable(monkeypatch, "UnshareBackend", "DockerBackend", "SeccompBackend")
 
     with pytest.raises(BackendUnavailable, match="invalidate the ablation"):
         Sandbox(tmp_path, caps=Capabilities(external_resources=False)).start()
+
+
+def test_seccomp_is_used_when_namespaces_are_unavailable(tmp_path, monkeypatch):
+    """The whole point of the seccomp backend.
+
+    With namespaces denied - the Colab situation - selection must fall through
+    to seccomp and still enforce the network ablation, rather than either
+    raising or silently downgrading to no isolation at all.
+    """
+    from sandbox_lab.sandbox import seccomp_available
+
+    if not seccomp_available():
+        pytest.skip("host refuses seccomp filters")
+    _disable(monkeypatch, "UnshareBackend", "DockerBackend")
+
+    with Sandbox(tmp_path, caps=Capabilities(external_resources=False)) as sb:
+        assert "seccomp" in sb.backend_name
 
 
 def test_full_capabilities_may_fall_back_to_local(tmp_path, monkeypatch):

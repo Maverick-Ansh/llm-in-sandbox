@@ -7,9 +7,11 @@ on:
 
 jobs:
   test:
-    # Ubuntu runners are full VMs, so unlike the Colab container they permit
-    # unshare(2). The namespace-enforced ablation tests actually execute here,
-    # which is the only place in this project they get real coverage.
+    # Measured, not assumed: GitHub's ubuntu runners also refuse unshare(2) for
+    # the test user, so the namespace ablation tests skip here exactly as they
+    # do on Colab. The seccomp-enforced ones DO run, which is where the ablation
+    # machinery actually gets covered. The capability report below exists so a
+    # green tick can be read correctly rather than taken to mean everything ran.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,6 +34,7 @@ jobs:
           echo "uid=$(id -u)"
           unshare --fork --pid --mount true && echo "unshare: OK" || echo "unshare: DENIED"
           docker info >/dev/null 2>&1 && echo "docker: OK" || echo "docker: absent"
+          python -c "from sandbox_lab.sandbox import seccomp_available; print('seccomp:', seccomp_available())"
       - name: Test
         run: pytest tests/ -q -rs
 
