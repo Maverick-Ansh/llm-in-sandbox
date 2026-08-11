@@ -36,7 +36,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=["http://127.0.0.1:8000/v1"],
         help="one or more model servers; episodes are assigned stickily across them",
     )
-    p.add_argument("--modes", nargs="+", default=["direct", "sandbox"])
+    p.add_argument("--modes", nargs="+", default=["direct", "sandbox"],
+               choices=["direct", "sandbox", "sandbox_neutral"])
     p.add_argument("--max-turns", type=int, default=30)
     p.add_argument("--max-tokens-per-turn", type=int, default=2048)
     p.add_argument("--temperature", type=float, default=0.0)
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         # The baseline has no sandbox, so capability ablations do not apply to
         # it; labelling it "full" keeps the paired comparison keys aligned.
-        run_caps = caps if mode == "sandbox" else Capabilities()
+        run_caps = caps if mode.startswith("sandbox") else Capabilities()
         run_suite(
             tasks,
             client=clients,

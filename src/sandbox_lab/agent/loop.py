@@ -8,6 +8,10 @@ Two run modes live here on purpose, sharing every line they can:
 ``direct``
     The control. Same model, same question, same answer extraction, no tools -
     one long chain of thought.
+``sandbox_neutral``
+    The separating arm. Identical tools and environment to ``sandbox``; the only
+    difference is a system prompt that does not discourage reasoning. Isolates
+    "the environment hurt the model" from "the prompt told it to stop thinking".
 
 Sharing the prompt template and the answer parser between them is what makes
 the comparison mean anything. If the baseline used a different extraction path,
@@ -46,6 +50,42 @@ it. Do not restate it in prose and stop - an episode only counts as answered if 
 `finish` was called. Every turn you spend after you already know the answer is \
 wasted."""
 
+# The separating experiment for the -32pp maths result.
+#
+# The measured effect could be either of two things and the run above cannot
+# tell them apart: the sandbox *environment* hurting a 4B model, or this repo's
+# sandbox *prompt* suppressing the chain-of-thought that was carrying the
+# baseline's 88% on maths. Evidence for the latter: the sandbox arm produced 37%
+# fewer tokens on maths and ran no commands at all in 46% of episodes, scoring
+# 0.38 in those against 0.65 when it did run something.
+#
+# So this variant changes exactly one thing: it stops telling the model not to
+# reason. The tools, their descriptions, the timeout guidance and the `finish`
+# instruction are all byte-identical to SANDBOX_SYSTEM_PROMPT, because anything
+# else that differs would be a second variable.
+SANDBOX_NEUTRAL_SYSTEM_PROMPT = """You are working inside a Linux computer environment.
+
+Think through the problem however you normally would. You also have a persistent \
+bash shell and a file editor available, and you should use them whenever running \
+something would help - checking arithmetic, evaluating an expression, simulating \
+a case, or verifying an answer you reached by reasoning.
+
+Guidance that matters:
+- Python with numpy/scipy is available, and you may pip install more.
+- Files persist across commands, so you can write intermediate results to disk.
+- Commands time out after 10 seconds. That kills the command, not your session. \
+For slow work use: nohup <cmd> > /tmp/out.log 2>&1 &  then poll the log.
+- Check your work where a check is possible.
+
+Ending the episode: the moment you have the answer, call the `finish` tool with \
+it. Do not restate it in prose and stop - an episode only counts as answered if \
+`finish` was called."""
+
+SANDBOX_PROMPTS = {
+    "sandbox": SANDBOX_SYSTEM_PROMPT,
+    "sandbox_neutral": SANDBOX_NEUTRAL_SYSTEM_PROMPT,
+}
+
 DIRECT_SYSTEM_PROMPT = """You are a careful expert problem solver.
 
 Think through the problem step by step, then give your final answer on the last \
@@ -82,7 +122,7 @@ _PROSE_FINISH_RE = re.compile(
 @dataclass
 class AgentConfig:
     model: str = "qwen3-4b"
-    mode: str = "sandbox"  # "sandbox" | "direct"
+    mode: str = "sandbox"  # "sandbox" | "sandbox_neutral" | "direct"
     max_turns: int = 30
     max_tokens_per_turn: int = 4096
     temperature: float = 0.0
@@ -189,6 +229,11 @@ class SandboxAgent:
     ) -> Trajectory:
         if self.cfg.mode == "direct":
             return self._run_direct(question, task_id=task_id)
+        if self.cfg.mode not in SANDBOX_PROMPTS:
+            raise ValueError(
+                f"unknown mode {self.cfg.mode!r}; expected 'direct' or one of "
+                f"{sorted(SANDBOX_PROMPTS)}"
+            )
         return self._run_sandbox(
             question,
             task_id=task_id,
@@ -244,7 +289,7 @@ class SandboxAgent:
         sandbox_root: str,
         backend: str,
     ) -> Trajectory:
-        traj = Trajectory(task_id=task_id, mode="sandbox", model=self.cfg.model)
+        traj = Trajectory(task_id=task_id, mode=self.cfg.mode, model=self.cfg.model)
         started = time.monotonic()
         tools = tools_for(caps)
 
@@ -257,7 +302,7 @@ class SandboxAgent:
             dispatcher = ToolDispatcher(sandbox)
             stalled_turns = 0
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": SANDBOX_SYSTEM_PROMPT},
+                {"role": "system", "content": SANDBOX_PROMPTS[self.cfg.mode]},
                 {"role": "user", "content": self._user_message(question, documents, sandbox)},
             ]
 

@@ -157,3 +157,61 @@ def test_both_modes_count_tokens_the_same_way(tmp_path):
     )
     assert direct.generated_tokens == 250
     assert sandbox.generated_tokens == 250
+
+
+# --------------------------------------------- the prompt-variant experiment
+
+
+def test_neutral_prompt_differs_only_in_the_reasoning_instruction():
+    """The separating arm must change exactly one thing.
+
+    The -32pp maths result could be the environment or the prompt. This variant
+    isolates it, which only works if everything else is held constant: same
+    tools, same timeout guidance, same `finish` instruction. Anything else that
+    drifts becomes a second variable and the arm stops separating anything.
+    """
+    from sandbox_lab.agent.loop import (
+        SANDBOX_NEUTRAL_SYSTEM_PROMPT as NEUTRAL,
+    )
+    from sandbox_lab.agent.loop import (
+        SANDBOX_SYSTEM_PROMPT as ORIGINAL,
+    )
+
+    # The instruction under test is present in one and absent from the other.
+    assert "rather than derive them in your head" in ORIGINAL
+    assert "rather than derive them in your head" not in NEUTRAL
+    assert "Prefer running code over long mental arithmetic" in ORIGINAL
+    assert "Prefer running code over long mental arithmetic" not in NEUTRAL
+
+    # Everything load-bearing is held constant.
+    for shared in [
+        "You are working inside a Linux computer environment.",
+        "Commands time out after 10 seconds. That kills the command, not your session.",
+        "nohup <cmd> > /tmp/out.log 2>&1 &",
+        "call the `finish` tool with",
+        "only counts as answered if",
+        "Python with numpy/scipy is",
+    ]:
+        assert shared in ORIGINAL, shared
+        assert shared in NEUTRAL, shared
+
+
+def test_mode_selects_the_prompt(tmp_path):
+    from sandbox_lab.agent.loop import SANDBOX_NEUTRAL_SYSTEM_PROMPT
+
+    client = StubClient([{"tool_calls": [{"name": "finish", "arguments": {"answer": "4"}}]}])
+    agent = SandboxAgent(client, AgentConfig(mode="sandbox_neutral"))
+    traj = agent.run("q", task_id="t", sandbox_root=str(tmp_path), backend="local")
+
+    assert traj.mode == "sandbox_neutral", "results must key on the arm, or it merges with sandbox"
+    assert client.calls[0]["messages"][0]["content"] == SANDBOX_NEUTRAL_SYSTEM_PROMPT
+    # The tools must be identical to the sandbox arm - only the prompt varies.
+    assert {t["function"]["name"] for t in client.calls[0]["tools"]} == {
+        "bash", "file_editor", "finish"
+    }
+
+
+def test_unknown_mode_is_rejected(tmp_path):
+    agent = SandboxAgent(StubClient([]), AgentConfig(mode="sandbox_typo"))
+    with pytest.raises(ValueError, match="unknown mode"):
+        agent.run("q", task_id="t", sandbox_root=str(tmp_path), backend="local")
