@@ -24,11 +24,17 @@ from sandbox_lab.sandbox import (  # noqa: E402 - after the platform skip
     seccomp_available,
 )
 
+# The success marker is assembled at runtime ("NET" + "OK") so the literal
+# "NETOK" never appears in the source. When the connection is refused, Python
+# prints the failing source line in the traceback - a marker spelled out in
+# source would appear in that traceback and the "not in output" assertions
+# would fail on a correctly blocked network.
 NET_PROBE = (
-    "import socket;"
-    "socket.create_connection(('1.1.1.1',443),timeout=4);"
-    "print('REACHED')"
+    "import socket\n"
+    "socket.create_connection(('1.1.1.1',443),timeout=4)\n"
+    "print('NET' + 'OK')\n"
 )
+MARKER = "NETOK"
 
 
 def _has_network() -> bool:
@@ -36,7 +42,7 @@ def _has_network() -> bool:
     probe = subprocess.run(
         [sys.executable, "-c", NET_PROBE], capture_output=True, text=True, timeout=30
     )
-    return "REACHED" in probe.stdout
+    return MARKER in probe.stdout
 
 
 requires_seccomp = pytest.mark.skipif(
@@ -64,14 +70,27 @@ def test_backend_refuses_to_claim_the_filesystem_ablation():
         backend.preflight()
 
 
+def _run_probe(sandbox, timeout_s: float) -> str:
+    """Write the probe to a file and run it.
+
+    Passing it via ``python3 -c "..."`` would need the probe inlined through two
+    layers of shell quoting; a file keeps the test measuring the sandbox rather
+    than the quoting.
+    """
+    sandbox.file_editor("create", path="probe.py", file_text=NET_PROBE)
+    return sandbox.bash("python3 probe.py", timeout_s=timeout_s)
+
+
 @requires_seccomp
 @requires_network
 @pytest.mark.slow
 def test_network_is_actually_blocked_inside_the_sandbox(tmp_path):
     caps = Capabilities(external_resources=False)
     with Sandbox(tmp_path / "off", caps=caps, backend="seccomp") as sb:
-        out = sb.bash(f"python3 -c \"{NET_PROBE}\"", timeout_s=20)
-    assert "REACHED" not in out
+        out = _run_probe(sb, 20)
+    assert MARKER not in out
+    # It must have been refused, not merely failed to start.
+    assert "Permission denied" in out or "PermissionError" in out
 
 
 @requires_seccomp
@@ -80,8 +99,8 @@ def test_network_is_actually_blocked_inside_the_sandbox(tmp_path):
 def test_positive_control_same_probe_succeeds_with_the_capability_on(tmp_path):
     """The control for the test above: without the ablation, the probe works."""
     with Sandbox(tmp_path / "on", caps=Capabilities(), backend="seccomp") as sb:
-        out = sb.bash(f"python3 -c \"{NET_PROBE}\"", timeout_s=25)
-    assert "REACHED" in out
+        out = _run_probe(sb, 25)
+    assert MARKER in out
 
 
 @requires_seccomp
@@ -129,6 +148,6 @@ def test_filter_is_inherited_by_grandchildren(tmp_path):
     with Sandbox(tmp_path, caps=caps, backend="seccomp") as sb:
         sb.file_editor("create", path="probe.py", file_text=NET_PROBE)
         out = sb.bash("bash -c 'python3 probe.py'", timeout_s=25)
-    assert "REACHED" not in out
+    assert MARKER not in out
     # The probe must have actually run and been refused, not failed to launch.
     assert "PermissionError" in out or "Permission denied" in out
