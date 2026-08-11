@@ -41,7 +41,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
-from typing import Callable
+from collections.abc import Callable
 
 # --- BPF instruction encoding (linux/bpf_common.h) ---------------------------
 _BPF_LD_W_ABS = 0x20  # BPF_LD | BPF_W | BPF_ABS

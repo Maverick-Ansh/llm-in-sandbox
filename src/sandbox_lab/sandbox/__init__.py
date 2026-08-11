@@ -10,9 +10,9 @@ from .backends import (
     default_rlimits,
     select_backend,
 )
-from .seccomp import SeccompUnavailable, make_network_blocker, seccomp_available
 from .editor import EditorError, FileEditor, PathJail
 from .sandbox import Sandbox, SandboxBudgetExceeded, SandboxStats
+from .seccomp import SeccompUnavailable, make_network_blocker, seccomp_available
 from .shell import PersistentShell, ShellError, ShellResult
 from .tools import (
     BASH_TOOL,
