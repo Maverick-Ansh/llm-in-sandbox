@@ -57,6 +57,9 @@ _READ_CHUNK = 65536
 # escalate to SIGKILL on the foreground process group.
 _INTERRUPT_GRACE_S = 2.0
 
+# CSI / OSC terminal control sequences.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07")
+
 
 class ShellError(RuntimeError):
     """The shell session itself failed (not the command run inside it)."""
@@ -93,15 +96,28 @@ class _HeadTailBuffer:
     it ended.
     """
 
+    # Sliding window scanned for the completion sentinel. Must be comfortably
+    # larger than a sentinel line so one can never straddle the window edge.
+    _RECENT_CAP = 8192
+
     def __init__(self, head_bytes: int, tail_bytes: int) -> None:
         self._head_cap = head_bytes
         self._tail_cap = tail_bytes
         self._head = bytearray()
         self._tail = bytearray()
+        # The newest bytes, regardless of which retention buffer they landed in.
+        # Searching `_tail` for the sentinel would be wrong: `_tail` stays empty
+        # until `_head` fills, so short commands - i.e. almost all of them -
+        # would never match and every one would time out.
+        self._recent = bytearray()
         self.total = 0
 
     def feed(self, data: bytes) -> None:
         self.total += len(data)
+        self._recent += data
+        if len(self._recent) > self._RECENT_CAP:
+            del self._recent[: len(self._recent) - self._RECENT_CAP]
+
         room = self._head_cap - len(self._head)
         if room > 0:
             self._head += data[:room]
@@ -116,9 +132,9 @@ class _HeadTailBuffer:
     def truncated(self) -> bool:
         return self.total > len(self._head) + len(self._tail)
 
-    def tail_text(self, encoding: str) -> str:
-        """Decode just the tail - used to hunt for the completion sentinel."""
-        return self._tail.decode(encoding, errors="replace")
+    def recent_text(self, encoding: str) -> str:
+        """Decode the newest bytes - used to hunt for the completion sentinel."""
+        return self._recent.decode(encoding, errors="replace")
 
     def render(self, encoding: str) -> str:
         head = self._head.decode(encoding, errors="replace")
@@ -193,7 +209,10 @@ class PersistentShell:
         master_fd, slave_fd = pty.openpty()
         self._configure_tty(slave_fd)
 
-        argv = [*self.argv_prefix, "bash", "--noprofile", "--norc"]
+        # --noediting disables readline. Without it bash wraps every prompt in
+        # bracketed-paste escapes (\x1b[?2004h) which land in the model's
+        # observations as noise, and which models then imitate.
+        argv = [*self.argv_prefix, "bash", "--noprofile", "--norc", "--noediting"]
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -339,9 +358,10 @@ class PersistentShell:
             if not data:
                 return None, False
             buf.feed(data)
-            # The sentinel is always the newest output, so only the tail needs
-            # scanning. Searching the whole buffer would be O(n^2) over a run.
-            match = pattern.search(buf.tail_text(self.encoding))
+            # The sentinel is always among the newest output, so only the recent
+            # window needs scanning. Searching the whole buffer would be O(n^2)
+            # over a chatty command.
+            match = pattern.search(buf.recent_text(self.encoding))
             if match:
                 return int(match.group(1)), False
 
@@ -356,23 +376,57 @@ class PersistentShell:
         """
         assert self._master_fd is not None and self._proc is not None
         os.write(self._master_fd, b"\x03")
-        self._pump(buf, pattern, deadline=time.monotonic() + _INTERRUPT_GRACE_S)
-
-        if self._proc.poll() is not None:
+        code, _ = self._pump(buf, pattern, deadline=time.monotonic() + _INTERRUPT_GRACE_S)
+        if code is not None:
+            # bash regained control and reported the interrupted command's
+            # status (typically 130). The session is healthy.
             return None, True
 
-        # Still alive: the command trapped or ignored SIGINT. Kill everything in
-        # the session except bash itself, then resynchronise.
+        # The command trapped or ignored SIGINT, so escalate - but only against
+        # the *foreground* process group. os.tcgetpgrp() asks the terminal which
+        # group currently owns it, which is the command. Deriving the pgid from
+        # bash's own pid instead would target bash itself (it is its own group
+        # leader after setsid) and SIGKILL the very session we are preserving.
+        shell_pgid = os.getpgid(self._proc.pid)
         try:
-            pgid = os.getpgid(self._proc.pid)
+            fg_pgid = os.tcgetpgrp(self._master_fd)
+        except OSError:
+            fg_pgid = -1
+
+        if fg_pgid > 0 and fg_pgid != shell_pgid:
             for sig in (signal.SIGTERM, signal.SIGKILL):
-                os.killpg(pgid, sig)
-                time.sleep(0.2)
-                if self._proc.poll() is not None:
+                try:
+                    os.killpg(fg_pgid, sig)
+                except (ProcessLookupError, PermissionError):
                     break
-        except (ProcessLookupError, PermissionError):
-            pass
+                code, _ = self._pump(buf, pattern, deadline=time.monotonic() + 1.0)
+                if code is not None:
+                    break
+        else:
+            # Job control is not active, so the command shares bash's group and
+            # killpg would take bash with it. Signal bash's children directly.
+            self._kill_children(shell_pgid)
+            self._pump(buf, pattern, deadline=time.monotonic() + 1.0)
         return None, True
+
+    def _kill_children(self, shell_pgid: int) -> None:
+        """SIGKILL bash's direct children, never bash itself."""
+        assert self._proc is not None
+        pid = self._proc.pid
+        try:
+            with open(f"/proc/{pid}/task/{pid}/children") as handle:
+                raw = handle.read()
+        except OSError:
+            return
+        for token in raw.split():
+            try:
+                child_pid = int(token)
+            except ValueError:
+                continue
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     # ---------------------------------------------------------------- helpers
 
@@ -391,6 +445,9 @@ class PersistentShell:
     @staticmethod
     def _strip_sentinel(text: str, sentinel: str) -> str:
         text = re.sub(rf"\n?{re.escape(sentinel)}\d+__\n?", "", text)
+        # Belt and braces alongside --noediting: any terminal control sequence
+        # that still slips through is framing, not command output.
+        text = _ANSI_RE.sub("", text)
         return text.replace("\r\n", "\n").strip("\n")
 
     # ----------------------------------------------------------------- teardown
