@@ -21,11 +21,12 @@ the parts the paper leaves soft.
 
 ```
 src/sandbox_lab/
-  sandbox/     the computer: persistent shell, file editor, isolation
+  sandbox/     the computer: persistent shell, file editor, isolation, seccomp
   agent/       the loop: model <-> sandbox, two run modes
   evals/       benchmarks, deterministic grading, resumable sweeps
-scripts/       experiment drivers
-tests/         71 tests, including enforced-ablation checks
+scripts/       serve.py, run_sweep.py, report.py
+notebooks/     colab_driver.ipynb (reproduce) + session_log_2xT4.ipynb (record)
+tests/         including enforced-ablation checks with positive controls
 ```
 
 ### The three tools
@@ -202,11 +203,42 @@ python scripts/run_sweep.py --benchmark mmlu_pro --n 40 \
 
 ---
 
+## Notebooks
+
+- **`notebooks/colab_driver.ipynb`** — clean, reproducible driver: install,
+  serve, sweep, report. Start here.
+- **`notebooks/session_log_2xT4.ipynb`** — the actual exploratory session,
+  kept because the dead ends are the useful part. Records each probe and what it
+  forced: the `-9` shell bug being ours rather than the platform's, `unshare`
+  being denied while seccomp is permitted, and FlexAttention costing ~5x
+  throughput.
+
+---
+
 ## Results
 
-_Populated as runs complete; see `results/` for raw trajectories._
+**Status: the headline sweep is incomplete.** The run was stopped partway with
+38 of 96 `direct` episodes finished and the `sandbox` arm not yet started, so
+there is no paired comparison to report. Partial single-arm accuracy is not a
+result and is deliberately not quoted here — the design is paired, and half of a
+paired design measures nothing.
 
-<!-- RESULTS -->
+`results.jsonl` is resumable: re-running the same `run_sweep.py` command
+continues from where it stopped.
+
+What *is* established, and measured rather than assumed:
+
+| finding | evidence |
+|---|---|
+| The full agent loop works end to end on a T4 | smoke test: both arms answered 849 correctly |
+| Sandbox mode used **0.49x** the generated tokens of the CoT baseline on that task | 812 vs 1660 tokens — bottom of the paper's reported 0.49–0.84x band, on a single item |
+| Enforced network ablation works where namespaces are denied | 7/7 seccomp tests pass on Colab, each with a positive control |
+| `unshare` is unavailable on Colab | `Operation not permitted` as uid 0 (no `CAP_SYS_ADMIN`) |
+| Attention backend dominates T4 throughput | FlexAttention ~22 tok/s → TRITON_ATTN 51–69 tok/s per card; ~120 tok/s across both |
+
+The single-task token ratio is an anecdote, not a measurement — one item, one
+seed. It is reported because it is what the smoke test showed, not as support
+for the paper's claim.
 
 ---
 
